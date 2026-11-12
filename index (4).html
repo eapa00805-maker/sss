@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AOCC Server Room Access</title>
+<style>
+:root{--bg:#14181c;--panel:#2b3138;--panel2:#1f2429;--screen:#0b2630;--ink:#d4ecf0;--key:#d3d7db;--edge:#7b848d;--ok:#35d07f;--bad:#ff5e54;--warn:#e3a82b}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:"Segoe UI",system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;padding:20px}
+h1{font-size:1.15rem;font-weight:600;margin:0 0 4px;letter-spacing:.02em}
+.sub{margin:0 0 18px;color:#8fa3ab;font-size:.9rem}
+.wrap{display:flex;gap:22px;flex-wrap:wrap;justify-content:center;width:100%;max-width:880px}
+.cam{flex:1 1 340px;max-width:420px;background:var(--panel2);border:1px solid #3a424a;border-radius:10px;padding:12px}
+video{width:100%;aspect-ratio:4/3;background:#000;border-radius:6px;transform:scaleX(-1);display:block;object-fit:cover}
+#cstat{margin:10px 2px 0;font-size:.88rem;color:#9fb4bc}
+.atm{flex:1 1 340px;max-width:380px;background:linear-gradient(#343b43,#262c32);border:2px solid #444d56;border-radius:14px;padding:18px;box-shadow:0 10px 30px #0008}
+.screen{background:var(--screen);border:3px solid #0a1417;border-radius:8px;padding:14px;min-height:150px;box-shadow:inset 0 0 18px #000a}
+#step{font-size:.82rem;color:#7fb5c2;margin:0 0 8px}
+#dots{font-family:ui-monospace,Consolas,monospace;font-size:2rem;letter-spacing:.35em;text-align:center;padding:8px 0;border-bottom:1px dashed #2f5663;min-height:56px}
+#msg{margin-top:12px;font-weight:700;font-size:1.15rem;text-align:center;min-height:30px}
+#msg.ok{color:var(--ok)}#msg.bad{color:var(--bad)}
+.keys{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}
+.keys button{height:58px;font-size:1.4rem;font-weight:700;color:#1b2025;background:linear-gradient(#e6e9ec,var(--key));border:1px solid var(--edge);border-bottom-width:5px;border-radius:7px;cursor:pointer}
+.keys button:active{transform:translateY(3px);border-bottom-width:2px}
+.keys button:focus-visible,#reset:focus-visible,#enrollBtn:focus-visible{outline:3px solid #6cc4ff;outline-offset:2px}
+.keys .clr{background:linear-gradient(#f1c35b,var(--warn));font-size:.95rem}
+.keys .ent{background:linear-gradient(#5be39b,#26a866);font-size:.95rem}
+.keys button:disabled{opacity:.45;cursor:not-allowed}
+#facebox{display:none;margin-top:14px}
+#facebox input{width:100%;padding:10px;border-radius:6px;border:1px solid var(--edge);font-size:1rem;margin-bottom:8px}
+#enrollBtn,#reset{width:100%;padding:12px;font-size:1rem;font-weight:700;border-radius:7px;border:1px solid var(--edge);border-bottom-width:4px;background:linear-gradient(#5be39b,#26a866);cursor:pointer;color:#10231a}
+#reset{display:none;margin-top:10px;background:linear-gradient(#e6e9ec,var(--key));color:#1b2025}
+.note{margin-top:16px;font-size:.78rem;color:#6f838b;max-width:880px;text-align:center}
+</style>
+</head>
+<body>
+<h1>Ruang Server AOCC · Area Terbatas</h1>
+<p class="sub">Verifikasi 2 langkah: PIN, lalu pemindaian wajah</p>
+
+<div class="wrap">
+  <section class="cam">
+    <video id="cam" autoplay playsinline muted></video>
+    <p id="cstat">Menyalakan kamera…</p>
+  </section>
+
+  <section class="atm">
+    <div class="screen">
+      <p id="step">Langkah 1 dari 2: masukkan PIN</p>
+      <div id="dots">······</div>
+      <div id="msg" role="status" aria-live="polite"></div>
+    </div>
+
+    <div class="keys" id="keys">
+      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+      <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+      <button data-k="C" class="clr">HAPUS</button><button data-k="0">0</button><button data-k="E" class="ent">MASUK</button>
+    </div>
+
+    <div id="facebox">
+      <input id="name" placeholder="Nama pemilik wajah" maxlength="60" autocomplete="off">
+      <button id="enrollBtn">DAFTARKAN WAJAH</button>
+    </div>
+    <button id="reset">KUNCI ULANG</button>
+  </section>
+</div>
+
+<p class="note">Kamera hanya bisa menyala lewat HTTPS (GitHub Pages sudah HTTPS) dan setelah Anda menekan "Allow".</p>
+
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/dist/face-api.js"></script>
+<script>
+/* GANTI dengan URL Web App hasil Deploy Apps Script (berakhiran /exec) */
+const API = "GANTI_DENGAN_URL_WEB_APP_ANDA";
+const MODEL_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model/";
+
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const video = $("cam");
+let pin = "", token = null, mode = null, step = "pin", busy = false, tries = 0, ready = false, autoReset = null;
+
+function call(action, data) {
+  const req = { action, ...data };
+  // Dibuka dari Apps Script (/exec): pakai google.script.run
+  if (window.google && google.script && google.script.run) {
+    return new Promise((res, rej) =>
+      google.script.run.withSuccessHandler(res).withFailureHandler(rej).apiCall(req));
+  }
+  // Dibuka dari GitHub Pages: pakai fetch (body string => tanpa CORS preflight)
+  return fetch(API, { method: "POST", body: JSON.stringify(req) }).then(r => r.json());
+}
+function msg(t, c) { const m = $("msg"); m.textContent = t || ""; m.className = c || ""; }
+function render() { $("dots").textContent = pin ? "●".repeat(pin.length) : "······"; }
+function setKeys(on) { document.querySelectorAll("#keys button").forEach(b => b.disabled = !on); }
+
+/* ---------- Kamera ---------- */
+async function startCam() {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    video.srcObject = s; await video.play();
+    $("cstat").textContent = ready ? "Kamera aktif" : "Kamera aktif · memuat model wajah…";
+  } catch (e) {
+    $("cstat").textContent = "Kamera gagal (" + e.name + "). Izinkan akses kamera di browser.";
+  }
+}
+async function loadModels() {
+  try {
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+    ]);
+    ready = true; $("cstat").textContent = "Kamera aktif · model wajah siap";
+  } catch (e) { $("cstat").textContent = "Model wajah gagal dimuat. Periksa koneksi internet."; }
+}
+async function detect() {
+  if (!ready || !video.videoWidth) return null;
+  return faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }))
+    .withFaceLandmarks().withFaceDescriptor();
+}
+function snap() {
+  const c = document.createElement("canvas"); c.width = 320; c.height = 240;
+  c.getContext("2d").drawImage(video, 0, 0, 320, 240);
+  return c.toDataURL("image/jpeg", 0.6);
+}
+const round = a => Array.from(a).map(x => +x.toFixed(4));
+
+/* ---------- Langkah 1: PIN ---------- */
+document.querySelectorAll("[data-k]").forEach(b => b.onclick = () => key(b.dataset.k));
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  if (/^\d$/.test(e.key)) key(e.key); else if (e.key === "Enter") key("E"); else if (e.key === "Backspace") key("C");
+});
+function key(k) {
+  if (step !== "pin" || busy) return;
+  if (k === "C") { pin = ""; msg(""); }
+  else if (k === "E") { submitPin(); return; }
+  else if (pin.length < 6) pin += k;
+  render();
+}
+async function submitPin() {
+  if (pin.length < 4) { msg("MINIMAL 4 DIGIT", "bad"); return; }
+  busy = true; setKeys(false); msg("MEMERIKSA…");
+  try {
+    const r = await call("pin", { pin });
+    pin = ""; render();
+    if (r.ok) { token = r.token; mode = r.mode; step = "transition"; msg("AKSES DITERIMA", "ok"); setTimeout(startFaceStep, 1000); }
+    else msg(r.msg || "AKSES DITOLAK", "bad");
+  } catch (e) { msg("SERVER TIDAK TERHUBUNG", "bad"); }
+  busy = false; if (step === "pin") setKeys(true);
+}
+
+/* ---------- Langkah 2: Face ID ---------- */
+function startFaceStep() {
+  tries = 0; msg("");
+  $("dots").textContent = "◉";
+  if (mode === "enroll") {
+    step = "enroll"; $("step").textContent = "Mode pendaftaran wajah";
+    $("facebox").style.display = "block"; msg("Isi nama, lalu daftarkan");
+  } else {
+    step = "face"; $("step").textContent = "Langkah 2 dari 2: hadapkan wajah ke kamera";
+    msg("MENCARI WAJAH…"); scanLoop();
+  }
+}
+async function scanLoop() {
+  let hits = 0;
+  while (step === "face") {
+    const d = await detect();
+    hits = d ? hits + 1 : 0;
+    $("cstat").textContent = d ? "Wajah terdeteksi" : (ready ? "Mencari wajah…" : "Memuat model wajah…");
+    if (hits >= 3) { step = "verifying"; await verify(d); return; }
+    await sleep(300);
+  }
+}
+async function verify(d) {
+  msg("MEMVERIFIKASI WAJAH…");
+  try {
+    const r = await call("verifyFace", { token, descriptor: round(d.descriptor), snapshot: snap() });
+    if (r.ok) { msg("AKSES DITERIMA · " + r.name, "ok"); finish(); return; }
+    tries++; msg(r.msg || "AKSES DITOLAK", "bad");
+    if (r.reset || tries >= 3) { setTimeout(resetAll, 3500); }
+    else { await sleep(2000); step = "face"; msg("MENCARI WAJAH…"); scanLoop(); }
+  } catch (e) { msg("SERVER TIDAK TERHUBUNG", "bad"); setTimeout(resetAll, 3500); }
+}
+
+/* ---------- Pendaftaran wajah ---------- */
+$("enrollBtn").onclick = async () => {
+  if (step !== "enroll") return;
+  const name = $("name").value.trim();
+  if (!name) { msg("ISI NAMA DULU", "bad"); return; }
+  step = "verifying"; $("enrollBtn").disabled = true;
+  const ds = []; let guard = 0;
+  while (ds.length < 3 && guard++ < 40) {
+    msg("MEMBACA WAJAH " + ds.length + "/3…");
+    const d = await detect();
+    if (d) ds.push(d.descriptor);
+    await sleep(600);
+  }
+  if (ds.length < 3) { msg("WAJAH TIDAK TERDETEKSI", "bad"); step = "enroll"; $("enrollBtn").disabled = false; return; }
+  const avg = new Array(128).fill(0);
+  ds.forEach(d => d.forEach((v, i) => avg[i] += v / 3));
+  try {
+    const r = await call("registerFace", { token, name, descriptor: round(avg), snapshot: snap() });
+    if (r.ok) { msg("WAJAH TERDAFTAR · AKSES DITERIMA", "ok"); finish(); }
+    else { msg(r.msg || "GAGAL MENDAFTAR", "bad"); if (r.reset) setTimeout(resetAll, 3000); else { step = "enroll"; $("enrollBtn").disabled = false; } }
+  } catch (e) { msg("SERVER TIDAK TERHUBUNG", "bad"); step = "enroll"; $("enrollBtn").disabled = false; }
+};
+
+/* ---------- Selesai / reset ---------- */
+function finish() {
+  step = "done"; $("facebox").style.display = "none"; $("reset").style.display = "block";
+  $("step").textContent = "Verifikasi selesai";
+  autoReset = setTimeout(resetAll, 20000);
+}
+function resetAll() {
+  clearTimeout(autoReset);
+  token = null; mode = null; pin = ""; tries = 0; step = "pin";
+  $("facebox").style.display = "none"; $("reset").style.display = "none";
+  $("enrollBtn").disabled = false; $("name").value = "";
+  $("step").textContent = "Langkah 1 dari 2: masukkan PIN";
+  msg(""); render(); setKeys(true);
+}
+$("reset").onclick = resetAll;
+
+render(); startCam(); loadModels();
+</script>
+</body>
+</html>
